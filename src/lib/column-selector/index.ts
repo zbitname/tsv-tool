@@ -1,74 +1,131 @@
-import fs from 'fs';
 import { Transform, TransformCallback, TransformOptions } from 'stream';
 
-const COLUMN_DELIMITER = Buffer.from('\t');
+const COL_DELIMITER = Buffer.from('\t');
 const ROW_DELIMITER = Buffer.from('\n');
-const COLUMN_DELIMITER_UINT8 = COLUMN_DELIMITER.readUInt8(0);
+const COL_DELIMITER_UINT8 = COL_DELIMITER.readUInt8(0);
 const ROW_DELIMITER_UINT8 = ROW_DELIMITER.readUInt8(0);
 
 export class ColumnSelectorTransform extends Transform {
     private prevBuffer = Buffer.alloc(0);
     private maxColIdx: number;
+    private needColIdxs: number[];
 
     constructor(
         opts: TransformOptions,
         private params: {
             colIndexes: number[];
+            cacheBufferMultiplier?: number;
         },
     ) {
         super(opts);
-        this.maxColIdx = Math.max(...this.params.colIndexes);
+        this.needColIdxs = this.params.colIndexes.sort();
+        this.maxColIdx = this.needColIdxs[this.needColIdxs.length - 1];
     }
 
+    // eslint-disable-next-line no-undef
     _transform(chunk: any, encoding: BufferEncoding, callback: TransformCallback): void {
-        const buf = Buffer.concat([this.prevBuffer, chunk]);
-        const cache = Buffer.alloc(buf.byteLength * 2);
+        callback(null, this.__parse(chunk));
+    }
 
-        let startRowPosition = 0;
-        let finishRowPosition = buf.indexOf(ROW_DELIMITER_UINT8, startRowPosition);
-        let colNumber = 0;
-        let cacheOffset = 0;
+    _flush(callback: TransformCallback): void {
+        if (this.prevBuffer.length > 0) {
+            callback(null, this.__parse(this.prevBuffer, true));
+        } else {
+            callback(null);
+        }
+    }
 
-        while (finishRowPosition >= 0) {
-            const row = buf.subarray(startRowPosition, finishRowPosition);
-            let startColPosition = 0;
-            let finishColPosition = 0;
+    __parse(chunk: any, isFinish = false) {
+        const buf = isFinish ? chunk : Buffer.concat([this.prevBuffer, chunk]);
+        const result = Buffer.alloc(buf.byteLength * Math.round(this.params.cacheBufferMultiplier || 1));
+        const maxColIdx = this.maxColIdx;
 
-            colNumber = 0;
-            finishColPosition = row.indexOf(COLUMN_DELIMITER_UINT8, startColPosition);
+        let resultOffset = 0;
+        let needCols = this.needColIdxs;
+        let col = 0;
+        let cellBeginPos = -1;
+        let cellEndPos = -1;
+        let nextCellDelimiterPos = -1;
+        let rowDelimiterPos = buf.indexOf(ROW_DELIMITER_UINT8);
+        let rowDelimiterPosForPrevBuffer = rowDelimiterPos;
+        let endOfRow = false;
+        let hasData = true;
 
-            while ((colNumber <= this.maxColIdx) || (finishColPosition < finishRowPosition && finishColPosition >= 0)) {
-                if (this.params.colIndexes.indexOf(colNumber) >= 0) {
-                    const v = row.subarray(startColPosition, finishColPosition);
-                    const l = v.byteLength;
+        while (hasData) {
+            if (rowDelimiterPos >= 0) {
+                rowDelimiterPosForPrevBuffer = rowDelimiterPos;
+            } else if (isFinish) {
+                rowDelimiterPosForPrevBuffer = buf.length;
+                rowDelimiterPos = rowDelimiterPosForPrevBuffer;
+            } else {
+                break;
+            }
 
-                    cache.fill(v, cacheOffset, l + cacheOffset);
-                    cacheOffset += l;
+            cellBeginPos = cellEndPos + 1;
+            nextCellDelimiterPos = buf.indexOf(COL_DELIMITER_UINT8, cellBeginPos);
 
-                    if (colNumber === this.maxColIdx) {
-                        cache.fill(ROW_DELIMITER_UINT8, cacheOffset, cacheOffset + 1);
-                        cacheOffset++;
+            if (nextCellDelimiterPos <= rowDelimiterPos || isFinish) {
+                if (isFinish && nextCellDelimiterPos < 0) {
+                    if (rowDelimiterPos >= 0) {
+                        cellEndPos = rowDelimiterPos;
                     } else {
-                        cache.fill(COLUMN_DELIMITER_UINT8, cacheOffset, cacheOffset + 1);
-                        cacheOffset++;
+                        cellEndPos = buf.length;
                     }
+
+                    endOfRow = true;
+                } else {
+                    cellEndPos = nextCellDelimiterPos;
+                    endOfRow = false;
+                }
+            } else {
+                if (rowDelimiterPos < 0) {
+                    cellEndPos = buf.indexOf(COL_DELIMITER_UINT8, cellEndPos + 1);
+
+                    if (cellEndPos < 0) {
+                        cellEndPos = buf.length;
+                    }
+                } else {
+                    cellEndPos = rowDelimiterPos;
                 }
 
-                startColPosition = finishColPosition + 1;
-                colNumber++;
-                finishColPosition = row.indexOf(COLUMN_DELIMITER_UINT8, startColPosition);
+                rowDelimiterPos = buf.indexOf(ROW_DELIMITER_UINT8, nextCellDelimiterPos);
+                endOfRow = true;
+            }
 
-                if (finishColPosition === -1) {
-                    finishColPosition = finishRowPosition;
+            if (needCols.indexOf(col) >= 0) {
+                const cell = buf.subarray(cellBeginPos, cellEndPos);
+
+                result.fill(cell, resultOffset, resultOffset + cell.length);
+                resultOffset += cell.length;
+
+                if (col === maxColIdx) {
+                    if (!isFinish) {
+                        result.fill(ROW_DELIMITER, resultOffset, ++resultOffset);
+                    }
+
+                    // JUMP
+                    // endOfRow = true;
+                    // cellEndPos = rowDelimiterPos;
+                    // rowDelimiterPos = buf.indexOf(ROW_DELIMITER_UINT8, rowDelimiterPos + 1);
+                } else {
+                    result.fill(COL_DELIMITER, resultOffset, ++resultOffset);
                 }
             }
 
-            startRowPosition = finishRowPosition + 1;
-            finishRowPosition = buf.indexOf(ROW_DELIMITER_UINT8, startRowPosition);
+            if (endOfRow) {
+                col = 0;
+                endOfRow = false;
+            } else {
+                col++;
+            }
+
+            if (cellEndPos < 0 || cellEndPos === buf.length) {
+                hasData = false;
+            }
         }
 
-        this.prevBuffer = buf.subarray(startRowPosition);
+        this.prevBuffer = buf.subarray(rowDelimiterPosForPrevBuffer + 1);
 
-        callback(null, cache.subarray(0, cacheOffset));
+        return result.subarray(0, resultOffset);
     }
 }
