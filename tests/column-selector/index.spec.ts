@@ -94,6 +94,8 @@ describe('Column Selector', () => {
     for (const chunkSize of [1, 5, 10, 20, 100, 1000]) {
         describe(`File / Selection by index / One column / CHUNK_SIZE=${chunkSize}`, () => {
             for (const test of tests) {
+                // if (test.name !== 'Same cell sizes, 3x6, with blank line on the end') continue;
+
                 const tmpFile = `/tmp/${Math.random() * 10000000}.tsv`;
                 const { name, inputData } = test;
 
@@ -106,6 +108,7 @@ describe('Column Selector', () => {
                 });
 
                 for (let colIdx = 0; colIdx < inputData[0].length; colIdx++) {
+                    // if (colIdx !== 2) continue;
                     it(`${name}. Select column #${colIdx}`, (cb) => {
                         let result = '';
                         const selector = new ColumnSelectorTransform({}, {
@@ -124,7 +127,7 @@ describe('Column Selector', () => {
                         });
                     });
                 }
-
+                // /*
                 for (let colIdx1 = 0; colIdx1 < inputData[0].length - 1; colIdx1++) {
                     for (let colIdx2 = colIdx1 + 1; colIdx2 < inputData[0].length; colIdx2++) {
                         // if (colIdx1 !== 0 || colIdx2 !== 2) continue;
@@ -149,6 +152,7 @@ describe('Column Selector', () => {
                         });
                     }
                 }
+                // */
             }
         });
     }

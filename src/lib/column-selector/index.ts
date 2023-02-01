@@ -37,7 +37,7 @@ export class ColumnSelectorTransform extends Transform {
 
     __parse(chunk: any, isFinish = false) {
         const buf = isFinish ? chunk : Buffer.concat([this.prevBuffer, chunk]);
-        const result = Buffer.alloc(buf.byteLength * Math.round(this.params.cacheBufferMultiplier || 1));
+        const result = Buffer.alloc(buf.byteLength * Math.round(this.params.cacheBufferMultiplier || 1) || 1);
         const maxColIdx = this.maxColIdx;
 
         let resultOffset = 0;
@@ -47,6 +47,7 @@ export class ColumnSelectorTransform extends Transform {
         let cellEndPos = -1;
         let nextCellDelimiterPos = -1;
         let rowDelimiterPos = buf.indexOf(ROW_DELIMITER_UINT8);
+        let nextRowDelimiterPos = buf.indexOf(ROW_DELIMITER_UINT8, rowDelimiterPos + 1);
         let rowDelimiterPosForPrevBuffer = rowDelimiterPos;
         let endOfRow = false;
         let hasData = true;
@@ -88,7 +89,6 @@ export class ColumnSelectorTransform extends Transform {
                     cellEndPos = rowDelimiterPos;
                 }
 
-                rowDelimiterPos = buf.indexOf(ROW_DELIMITER_UINT8, nextCellDelimiterPos);
                 endOfRow = true;
             }
 
@@ -103,10 +103,13 @@ export class ColumnSelectorTransform extends Transform {
                         result.fill(ROW_DELIMITER, resultOffset, ++resultOffset);
                     }
 
-                    // JUMP
-                    // endOfRow = true;
-                    // cellEndPos = rowDelimiterPos;
-                    // rowDelimiterPos = buf.indexOf(ROW_DELIMITER_UINT8, rowDelimiterPos + 1);
+                    // JUMP TO NEXT ROW
+                    endOfRow = true;
+                    cellEndPos = rowDelimiterPos;
+                    if (isFinish && nextRowDelimiterPos >= 0) { // if we have a blank line on the end of file
+                        result.fill(ROW_DELIMITER, resultOffset, ++resultOffset);
+                    }
+                    rowDelimiterPos = nextRowDelimiterPos;
                 } else {
                     result.fill(COL_DELIMITER, resultOffset, ++resultOffset);
                 }
@@ -115,6 +118,8 @@ export class ColumnSelectorTransform extends Transform {
             if (endOfRow) {
                 col = 0;
                 endOfRow = false;
+                rowDelimiterPos = nextRowDelimiterPos;
+                nextRowDelimiterPos = buf.indexOf(ROW_DELIMITER_UINT8, rowDelimiterPos + 1);
             } else {
                 col++;
             }
