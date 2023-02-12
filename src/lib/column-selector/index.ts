@@ -1,43 +1,95 @@
 import { Transform, TransformCallback, TransformOptions } from 'stream';
 
-const COL_DELIMITER = Buffer.from('\t');
+const COL_DELIMITER_STR = '\t';
+const COL_DELIMITER = Buffer.from(COL_DELIMITER_STR);
 const ROW_DELIMITER = Buffer.from('\n');
 const COL_DELIMITER_UINT8 = COL_DELIMITER.readUInt8(0);
 const ROW_DELIMITER_UINT8 = ROW_DELIMITER.readUInt8(0);
 
 export class ColumnSelectorTransform extends Transform {
     private prevBuffer = Buffer.alloc(0);
-    private maxColIdx: number;
-    private needColIdxs: number[];
+    private maxColIdx!: number;
+    private needColIdxs!: number[];
+    private needHeader = true;
+    private cacheBufferMultiplier = 1;
 
     constructor(
         opts: TransformOptions,
         private params: {
-            colIndexes: number[];
+            colIndexes?: number[];
+            colNames?: string[];
             cacheBufferMultiplier?: number;
         },
     ) {
         super(opts);
-        this.needColIdxs = this.params.colIndexes.sort();
-        this.maxColIdx = this.needColIdxs[this.needColIdxs.length - 1];
+
+        if (params.cacheBufferMultiplier && params.cacheBufferMultiplier < 1) {
+            throw new Error('cacheBufferMultiplier can not be less than 1');
+        }
+
+        if (params.colIndexes) {
+            this.needColIdxs = params.colIndexes.sort();
+            this.maxColIdx = this.needColIdxs[this.needColIdxs.length - 1];
+            this.needHeader = false;
+        }
     }
 
     // eslint-disable-next-line no-undef
     _transform(chunk: any, encoding: BufferEncoding, callback: TransformCallback): void {
-        callback(null, this.__parse(chunk));
+        if (this.needHeader) {
+            this.__parseHeader(chunk);
+
+            if (this.needHeader) {
+                callback(null, Buffer.alloc(0));
+            } else {
+                callback(null, this.__parse(Buffer.alloc(0)));
+            }
+        } else {
+            callback(null, this.__parse(chunk));
+        }
     }
 
     _flush(callback: TransformCallback): void {
         if (this.prevBuffer.length > 0) {
+            if (this.needHeader) {
+                this.__parseHeader(Buffer.alloc(0), true);
+            }
             callback(null, this.__parse(this.prevBuffer, true));
+
         } else {
             callback(null);
         }
     }
 
+    __parseHeader(chunk: any, isFinish = false) {
+        if (this.params.colNames) {
+            const buf = isFinish ? chunk : Buffer.concat([this.prevBuffer, chunk]);
+            const rowDelimiterPos = buf.indexOf(ROW_DELIMITER_UINT8);
+
+            if (rowDelimiterPos >= 0 || isFinish) {
+                const row = buf.subarray(0, rowDelimiterPos).toString().split(COL_DELIMITER_STR);
+                const colNames = this.params.colNames;
+                this.needColIdxs = row
+                    .map((v: string, i: number) => colNames.indexOf(v) >= 0 ? i : -1)
+                    .filter((v: number) => v >= 0)
+                    .sort();
+                this.needHeader = false;
+                this.maxColIdx = this.needColIdxs[this.needColIdxs.length - 1];
+
+                if (this.needColIdxs.length === 0) {
+                    throw new Error('Nothing to select');
+                }
+            }
+            this.prevBuffer = buf.slice();
+            return;
+        }
+
+        throw new Error('You need to choose something (colIndexes or colNames) for column selection');
+    }
+
     __parse(chunk: any, isFinish = false) {
         const buf = isFinish ? chunk : Buffer.concat([this.prevBuffer, chunk]);
-        const result = Buffer.alloc(buf.byteLength * Math.round(this.params.cacheBufferMultiplier || 1) || 1);
+        const result = Buffer.alloc(buf.byteLength * Math.round(this.cacheBufferMultiplier || 1) || 1);
         const maxColIdx = this.maxColIdx;
 
         let resultOffset = 0;

@@ -92,10 +92,8 @@ describe('Column Selector', () => {
     ];
 
     for (const chunkSize of [1, 5, 10, 20, 100, 1000]) {
-        describe(`File / Selection by index / One column / CHUNK_SIZE=${chunkSize}`, () => {
+        describe(`File / Selection by index / CHUNK_SIZE=${chunkSize}`, () => {
             for (const test of tests) {
-                // if (test.name !== 'Same cell sizes, 3x6, with blank line on the end') continue;
-
                 const tmpFile = `/tmp/${Math.random() * 10000000}.tsv`;
                 const { name, inputData } = test;
 
@@ -108,7 +106,6 @@ describe('Column Selector', () => {
                 });
 
                 for (let colIdx = 0; colIdx < inputData[0].length; colIdx++) {
-                    // if (colIdx !== 2) continue;
                     it(`${name}. Select column #${colIdx}`, (cb) => {
                         let result = '';
                         const selector = new ColumnSelectorTransform({}, {
@@ -127,10 +124,9 @@ describe('Column Selector', () => {
                         });
                     });
                 }
-                // /*
+
                 for (let colIdx1 = 0; colIdx1 < inputData[0].length - 1; colIdx1++) {
                     for (let colIdx2 = colIdx1 + 1; colIdx2 < inputData[0].length; colIdx2++) {
-                        // if (colIdx1 !== 0 || colIdx2 !== 2) continue;
                         it(`${name}. Select columns #{${colIdx1}, ${colIdx2}}`, (cb) => {
                             let result = '';
                             const selector = new ColumnSelectorTransform({}, {
@@ -152,7 +148,65 @@ describe('Column Selector', () => {
                         });
                     }
                 }
-                // */
+            }
+        });
+
+        describe(`File / Selection by column name / CHUNK_SIZE=${chunkSize}`, () => {
+            for (const test of tests) {
+                const tmpFile = `/tmp/${Math.random() * 10000000}.tsv`;
+                const { name, inputData } = test;
+
+                before(async () => {
+                    writeFileSync(tmpFile, inputData.map(i => i.join('\t')).join('\n'));
+                });
+
+                after(() => {
+                    rmSync(tmpFile);
+                });
+
+                for (let colIdx = 0; colIdx < inputData[0].length; colIdx++) {
+                    it(`${name}. Select column #${colIdx}(${test.inputData[0][colIdx]})`, (cb) => {
+                        let result = '';
+                        const selector = new ColumnSelectorTransform({}, {
+                            colNames: [test.inputData[0][colIdx]],
+                        });
+
+                        const r = createReadStream(tmpFile).pipe(selector);
+
+                        r.on('data', (chunk) => {
+                            result += chunk.toString();
+                        });
+
+                        r.once('end', () => {
+                            expect(result).eq(inputData.map(i => i[colIdx]).join('\n'));
+                            cb();
+                        });
+                    });
+                }
+
+                for (let colIdx1 = 0; colIdx1 < inputData[0].length - 1; colIdx1++) {
+                    for (let colIdx2 = colIdx1 + 1; colIdx2 < inputData[0].length; colIdx2++) {
+                        it(`${name}. Select columns #{${colIdx1}(${test.inputData[0][colIdx1]}), ${colIdx2}(${test.inputData[0][colIdx2]})}`, (cb) => {
+                            let result = '';
+                            const selector = new ColumnSelectorTransform({}, {
+                                colNames: [test.inputData[0][colIdx1], test.inputData[0][colIdx2]],
+                            });
+
+                            const r = createReadStream(tmpFile).pipe(selector);
+
+                            r.on('data', (chunk) => {
+                                result += chunk.toString();
+                            });
+
+                            r.once('end', () => {
+                                expect(result).eq(inputData.map(
+                                    i => [i[colIdx1], i[colIdx2]].filter(i => typeof i !== 'undefined').join('\t')
+                                ).join('\n'));
+                                cb();
+                            });
+                        });
+                    }
+                }
             }
         });
     }
